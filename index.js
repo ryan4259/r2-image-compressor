@@ -19,6 +19,7 @@ const s3 = new S3Client({
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
+  forcePathStyle: true, // <--- This is required for Cloudflare R2
 });
 
 app.post('/', upload.single('file'), async (req, res) => {
@@ -37,7 +38,7 @@ app.post('/', upload.single('file'), async (req, res) => {
       .toFormat('webp', { quality: 75 })
       .toBuffer();
 
-    // Upload full-size
+    // Upload full-size image
     await s3.send(new PutObjectCommand({
       Bucket: process.env.R2_BUCKET,
       Key: `full/${fileName}.webp`,

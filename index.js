@@ -1,68 +1,77 @@
 const express = require('express');
+const cors = require('cors');
 const multer = require('multer');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const sharp = require('sharp');
-const fs = require('fs');
-const path = require('path');
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 require('dotenv').config();
 
 const app = express();
-const port = process.env.PORT || 3000;
-const upload = multer({ dest: 'uploads/' });
+const PORT = process.env.PORT || 10000;
+
+app.use(cors());
+
+const upload = multer();
 
 const s3 = new S3Client({
   region: 'auto',
-  endpoint: process.env.R2_ENDPOINT,
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
   credentials: {
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
 });
 
-const uploadToR2 = async (buffer, key) => {
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Key: key,
-      Body: buffer,
-      ContentType: 'image/webp',
-    })
-  );
-};
-
-app.post('/upload', upload.single('image'), async (req, res) => {
+app.post('/', upload.single('file'), async (req, res) => {
   try {
-    const inputPath = req.file.path;
-    const fileName = path.parse(req.file.originalname).name;
+    const file = req.file;
 
-    // Compress to full-size WebP
-    const fullImageBuffer = await sharp(inputPath)
+    if (!file) {
+      return res.status(400).json({ success: false, error: 'No file uploaded' });
+    }
+
+    const fileName = `${Date.now()}-${file.originalname}`;
+
+    // Compress full-size image
+    const fullImageBuffer = await sharp(file.buffer)
       .resize({ width: 1080, withoutEnlargement: true })
-      .webp({ quality: 70 })
+      .toFormat('webp', { quality: 75 })
       .toBuffer();
 
-    await uploadToR2(fullImageBuffer, `full/${fileName}.webp`);
+    // Upload full-size
+    await s3.send(new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: `full/${fileName}.webp`,
+      Body: fullImageBuffer,
+      ContentType: 'image/webp',
+    }));
 
-    // Create thumbnail WebP
-    const thumbImageBuffer = await sharp(inputPath)
+    // Create thumbnail
+    const thumbBuffer = await sharp(file.buffer)
       .resize({ width: 300 })
-      .webp({ quality: 60 })
+      .toFormat('webp', { quality: 70 })
       .toBuffer();
 
-    await uploadToR2(thumbImageBuffer, `thumb/${fileName}.webp`);
+    // Upload thumbnail
+    await s3.send(new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: `thumbnails/${fileName}.webp`,
+      Body: thumbBuffer,
+      ContentType: 'image/webp',
+    }));
 
-    fs.unlinkSync(inputPath); // cleanup
+    const baseUrl = `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${process.env.R2_BUCKET}`;
 
     res.json({
-      full_url: `https://${process.env.R2_BUCKET_NAME}.${process.env.R2_ENDPOINT.replace(/^https?:\/\//, '')}/full/${fileName}.webp`,
-      thumb_url: `https://${process.env.R2_BUCKET_NAME}.${process.env.R2_ENDPOINT.replace(/^https?:\/\//, '')}/thumb/${fileName}.webp`,
+      success: true,
+      fullSizeUrl: `${baseUrl}/full/${fileName}.webp`,
+      thumbnailUrl: `${baseUrl}/thumbnails/${fileName}.webp`,
     });
   } catch (err) {
-    console.error('❌ Error during upload:', err);
-    res.status(500).json({ error: 'Image processing failed' });
+    console.error('Upload error:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });

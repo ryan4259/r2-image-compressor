@@ -15,8 +15,9 @@ const PORT = process.env.PORT || 10000;
 // Allow Render test URL + optional future custom domain
 const allowedOrigins = [
   'http://localhost:3000', // Local dev
-  'https://app.flutterflow.io', // Replace with your FF test mode URL
-  'https://your-custom-domain.com' // Add custom domain later
+  'https://app.flutterflow.io', // FF test mode
+  'https://r2-image-compressor.onrender.com', // Your Render backend
+  'https://your-custom-domain.com' // Future custom domain
 ];
 
 app.use(cors({

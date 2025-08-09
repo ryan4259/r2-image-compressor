@@ -24,6 +24,7 @@ const allowedExact = new Set([
   'http://localhost:3000',
   'https://app.flutterflow.io',
   'https://r2-image-compressor.onrender.com',
+  'https://ff-debug-service-frontend-free-ygxkweukma-uc.a.run.app', // <-- new
 ]);
 
 const isAllowedOrigin = (origin) => {
@@ -31,12 +32,19 @@ const isAllowedOrigin = (origin) => {
   try {
     const { hostname, origin: o } = new URL(origin);
     if (allowedExact.has(o)) return true;
+
+    // FlutterFlow preview subdomains
     if (hostname === 'preview.flutterflow.app' || hostname.endsWith('.flutterflow.app')) return true;
+
+    // FlutterFlow debug proxy on Cloud Run (future-proof)
+    if (hostname.startsWith('ff-debug-service-frontend') && hostname.endsWith('.a.run.app')) return true;
+
     return false;
   } catch {
     return false;
   }
 };
+
 
 const corsOptions = {
   origin: (origin, cb) => (isAllowedOrigin(origin) ? cb(null, true) : cb(new Error('Not allowed by CORS'))),

@@ -4,7 +4,8 @@ const cors = require('cors');
 const multer = require('multer');
 const sharp = require('sharp');
 const path = require('path');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 require('dotenv').config();
 
 const app = express();
@@ -31,9 +32,7 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization'],
   optionsSuccessStatus: 200,
 };
-
-// ✅ Express 5 compatible wildcard:
-app.options(/.*/, cors(corsOptions)); // Preflight for any path
+app.options(/.*/, cors(corsOptions)); // Preflight for any path (Express 5 compatible)
 app.use(cors(corsOptions));
 
 /* ============================
@@ -41,8 +40,7 @@ app.use(cors(corsOptions));
    ============================ */
 const upload = multer({
   storage: multer.memoryStorage(),
-  // Optional: limit size to ~15MB
-  limits: { fileSize: 15 * 1024 * 1024 }
+  limits: { fileSize: 15 * 1024 * 1024 }, // ~15MB
 });
 
 /* ============================
@@ -66,19 +64,19 @@ function sanitizeBaseName(original) {
   return base.replace(/[^a-zA-Z0-9._-]+/g, '_');
 }
 
+// Prevent traversal and unexpected prefixes when reading back
+const ALLOWED_PREFIXES = ['full/', 'thumbnails/'];
+function isAllowedKey(key = '') {
+  if (typeof key !== 'string') return false;
+  if (key.includes('..')) return false;
+  return ALLOWED_PREFIXES.some((p) => key.startsWith(p));
+}
+
 /* ============================
-   Routes
+   Health & Root
    ============================ */
-
-// Health/diagnostic
-app.get('/healthz', (_req, res) => {
-  res.json({ ok: true, ts: Date.now() });
-});
-
-// Optional root
-app.get('/', (_req, res) => {
-  res.send('R2 image compressor is running.');
-});
+app.get('/healthz', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get('/', (_req, res) => res.send('R2 image compressor is running.'));
 
 /* ============================
    Upload + Compress
@@ -87,11 +85,8 @@ app.get('/', (_req, res) => {
 app.post('/', upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
-    if (!file) {
-      return res.status(400).json({ success: false, error: 'No file uploaded' });
-    }
+    if (!file) return res.status(400).json({ success: false, error: 'No file uploaded' });
 
-    // Basic mime/type check (allow common image types)
     const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/heic', 'image/heif'];
     if (file.mimetype && !allowed.includes(file.mimetype)) {
       return res.status(400).json({ success: false, error: `Unsupported content type: ${file.mimetype}` });
@@ -103,7 +98,7 @@ app.post('/', upload.single('file'), async (req, res) => {
 
     // Full-size (max width 1080)
     const fullImageBuffer = await sharp(file.buffer)
-      .rotate() // auto-orient using EXIF
+      .rotate() // auto-orient via EXIF
       .resize({ width: 1080, withoutEnlargement: true })
       .toFormat('webp', { quality: 75 })
       .toBuffer();
@@ -129,7 +124,6 @@ app.post('/', upload.single('file'), async (req, res) => {
       ContentType: 'image/webp',
     }));
 
-    // Return keys only (private by default).
     return res.json({
       success: true,
       fullKey: `full/${fileName}`,
@@ -138,6 +132,55 @@ app.post('/', upload.single('file'), async (req, res) => {
   } catch (err) {
     console.error('Upload error:', err);
     return res.status(500).json({ success: false, error: err.message || 'Server error' });
+  }
+});
+
+/* ============================
+   Signed URL (Private fetch)
+   GET /signed-url?key=<r2-key>&expires=3600
+   ============================ */
+app.get('/signed-url', async (req, res) => {
+  try {
+    const { key, expires } = req.query;
+    if (!key) return res.status(400).json({ success: false, error: 'Missing key' });
+    if (!isAllowedKey(key)) return res.status(400).json({ success: false, error: 'Invalid key' });
+
+    const command = new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: key,
+    });
+
+    const url = await getSignedUrl(s3, command, { expiresIn: Number(expires) || 3600 });
+    return res.json({ success: true, url });
+  } catch (err) {
+    console.error('signed-url error:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Server error' });
+  }
+});
+
+/* ============================
+   (Optional) Streaming proxy
+   GET /image?key=<r2-key>
+   Good if you want your own cache headers & domain.
+   ============================ */
+app.get('/image', async (req, res) => {
+  try {
+    const { key } = req.query;
+    if (!key) return res.status(400).send('Missing key');
+    if (!isAllowedKey(key)) return res.status(400).send('Invalid key');
+
+    const command = new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key });
+    const data = await s3.send(command); // data.Body is a stream
+
+    // Set basic cache headers (tune to your needs)
+    res.setHeader('Content-Type', data.ContentType || 'image/webp');
+    res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=300'); // 5 minutes
+    if (data.ETag) res.setHeader('ETag', data.ETag);
+
+    data.Body.pipe(res);
+  } catch (err) {
+    console.error('image proxy error:', err);
+    res.status(500).send('Server error');
   }
 });
 

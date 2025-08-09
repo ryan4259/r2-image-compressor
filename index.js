@@ -8,9 +8,26 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ✅ Allow all origins for testing (CORS fix)
+// ✅ Hybrid CORS: allow FlutterFlow preview, localhost, and easy custom domain add later
+const allowedOrigins = [
+  'https://preview.flutterflow.app', // FlutterFlow preview
+  'http://localhost:3000',           // Local dev
+  // 'https://yourcustomdomain.com'   // <-- Add here later for production
+];
+
 app.use(cors({
-  origin: '*',
+  origin: function (origin, callback) {
+    console.log(`CORS check: Origin = ${origin}`); // Log to Render console
+
+    // Allow requests with no origin (Postman, mobile apps)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    } else {
+      return callback(new Error(`Not allowed by CORS: ${origin}`));
+    }
+  },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -32,10 +49,14 @@ app.post('/', upload.single('file'), async (req, res) => {
     const file = req.file;
 
     if (!file) {
-      return res.status(400).json({ success: false, error: 'No file uploaded' });
+      return res.status(400).json({
+        success: false,
+        error: 'No file uploaded — make sure the form-data field name is "file"'
+      });
     }
 
-    const fileName = `${Date.now()}-${file.originalname}`;
+    const baseName = file.originalname.replace(/\.[^/.]+$/, ''); // remove extension
+    const fileName = `${Date.now()}-${baseName}`;
 
     // Compress full-size image
     const fullImageBuffer = await sharp(file.buffer)

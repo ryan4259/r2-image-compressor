@@ -2,25 +2,29 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const sharp = require('sharp');
+const path = require('path');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ✅ CORS fix: allow FlutterFlow preview, localhost, or no origin (Postman/mobile)
+// ============================
+// ✅ CORS Setup
+// ============================
+// Allow Render test URL + optional future custom domain
+const allowedOrigins = [
+  'http://localhost:3000', // Local dev
+  'https://app.flutterflow.io', // Replace with your FF test mode URL
+  'https://your-custom-domain.com' // Add custom domain later
+];
+
 app.use(cors({
-  origin: function (origin, callback) {
-    if (
-      !origin || 
-      origin.includes('preview.flutterflow.app') || 
-      origin.includes('localhost')
-      // Add your custom domain later:
-      // || origin.includes('yourdomain.com')
-    ) {
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
       callback(null, true);
     } else {
-      callback(new Error(`CORS blocked: ${origin}`));
+      callback(new Error('Not allowed by CORS'));
     }
   },
   methods: ['GET', 'POST', 'OPTIONS'],
@@ -39,6 +43,9 @@ const s3 = new S3Client({
   forcePathStyle: true,
 });
 
+// ============================
+// ✅ Upload Route
+// ============================
 app.post('/', upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
@@ -46,9 +53,11 @@ app.post('/', upload.single('file'), async (req, res) => {
       return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
 
-    const fileName = `${Date.now()}-${file.originalname}`;
+    // ✅ Clean filename: strip extension & spaces, only ONE timestamp
+    const originalName = path.parse(file.originalname).name.replace(/\s+/g, '_');
+    const fileName = `${Date.now()}-${originalName}`;
 
-    // Compress full-size image
+    // ✅ Compress full-size image
     const fullImageBuffer = await sharp(file.buffer)
       .resize({ width: 1080, withoutEnlargement: true })
       .toFormat('webp', { quality: 75 })
@@ -61,7 +70,7 @@ app.post('/', upload.single('file'), async (req, res) => {
       ContentType: 'image/webp',
     }));
 
-    // Create thumbnail
+    // ✅ Create thumbnail
     const thumbBuffer = await sharp(file.buffer)
       .resize({ width: 300 })
       .toFormat('webp', { quality: 70 })
@@ -74,6 +83,7 @@ app.post('/', upload.single('file'), async (req, res) => {
       ContentType: 'image/webp',
     }));
 
+    // ✅ Base URL (will change if you add custom domain later)
     const baseUrl = `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${process.env.R2_BUCKET}`;
 
     res.json({
@@ -81,12 +91,16 @@ app.post('/', upload.single('file'), async (req, res) => {
       fullSizeUrl: `${baseUrl}/full/${fileName}.webp`,
       thumbnailUrl: `${baseUrl}/thumbnails/${fileName}.webp`,
     });
+
   } catch (err) {
     console.error('Upload error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
+// ============================
+// ✅ Start Server
+// ============================
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });

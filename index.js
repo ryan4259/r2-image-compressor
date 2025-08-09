@@ -9,28 +9,55 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 /* ============================
-   ✅ Manual CORS (with preflight)
+   ✅ Manual CORS (with preflight) — allows FlutterFlow + localhost + env list
    ============================ */
-const allowedOrigins = new Set([
-  'http://localhost:3000',              // Local dev
-  'https://app.flutterflow.io',         // FlutterFlow Test Mode
-  // 'https://your-custom-domain.com',  // <— add later
-]);
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // Postman/mobile
+  try {
+    const url = new URL(origin);
+    const h = url.hostname.toLowerCase();
+
+    // Allow FlutterFlow editors/previews/hosting
+    const isFlutterFlow =
+      h === 'app.flutterflow.io' ||
+      h.endsWith('.flutterflow.app') ||
+      h.endsWith('.flutterflow.io');
+
+    // Allow localhost (any port)
+    const isLocalhost = h === 'localhost' || h === '127.0.0.1';
+
+    // Allow extra origins from env (comma-separated). You can put full origins or hostnames.
+    const extra = (process.env.ALLOWED_ORIGINS || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    const inExtra =
+      extra.includes(origin) || // exact origin match, e.g. https://yourdomain.com
+      extra.includes(h);        // or hostname only, e.g. yourdomain.com
+
+    return isFlutterFlow || isLocalhost || inExtra;
+  } catch {
+    return false;
+  }
+}
 
 app.use((req, res, next) => {
-  const origin = req.headers.origin;
+  const origin = req.headers.origin || '';
+  const allowed = isAllowedOrigin(origin) || process.env.NODE_ENV === 'development';
 
-  // Allow no-origin (Postman/mobile) OR origin in allowlist
-  const isAllowed = !origin || allowedOrigins.has(origin) || process.env.NODE_ENV === 'development';
+  // Log the origin we saw (helps debug)
+  if (process.env.LOG_ORIGIN === '1') {
+    console.log('[CORS] Origin:', origin || '(no-origin)');
+  }
 
-  if (isAllowed) {
-    if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
-    else res.setHeader('Access-Control-Allow-Origin', '*');
-
+  if (allowed) {
+    // Echo the specific origin if present, else *
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    // res.setHeader('Access-Control-Allow-Credentials', 'true'); // enable if you need cookies
+    // res.setHeader('Access-Control-Allow-Credentials', 'true'); // enable if you use cookies
 
     if (req.method === 'OPTIONS') return res.sendStatus(200);
     return next();
@@ -41,12 +68,12 @@ app.use((req, res, next) => {
 });
 
 /* ============================
-   ✅ Multer Setup
+   ✅ Multer
    ============================ */
 const upload = multer();
 
 /* ============================
-   ✅ S3 Client (Cloudflare R2)
+   ✅ Cloudflare R2 (S3-compatible)
    ============================ */
 const s3 = new S3Client({
   region: 'auto',
@@ -98,7 +125,6 @@ app.post('/', upload.single('file'), async (req, res) => {
       ContentType: 'image/webp',
     }));
 
-    // Public base URL
     const baseUrl = `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${process.env.R2_BUCKET}`;
 
     res.json({
@@ -112,9 +138,7 @@ app.post('/', upload.single('file'), async (req, res) => {
   }
 });
 
-/* ============================
-   ✅ Start Server
-   ============================ */
+/* ============================ */
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });

@@ -9,13 +9,13 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 /* ============================
-   ✅ CORS (manual, with preflight)
-   - Allows any FlutterFlow host (app/flutterflow.app + *.flutterflow.app + *.flutterflow.io)
+   ✅ CORS (manual + preflight)
+   - Allows any FlutterFlow host
    - Allows localhost
-   - Allows extra origins via env: ALLOWED_ORIGINS="https://yourdomain.com, yourdomain.com"
+   - Extra origins via env ALLOWED_ORIGINS (comma-separated)
    ============================ */
 function isAllowedOrigin(origin) {
-  if (!origin) return true; // Postman/mobile
+  if (!origin) return true; // Postman/mobile/native
   try {
     const url = new URL(origin);
     const h = url.hostname.toLowerCase();
@@ -34,7 +34,6 @@ function isAllowedOrigin(origin) {
       .filter(Boolean);
 
     const inExtra = extra.includes(origin) || extra.includes(h);
-
     return isFlutterFlow || isLocalhost || inExtra;
   } catch {
     return false;
@@ -46,7 +45,7 @@ app.use((req, res, next) => {
   const allowed = isAllowedOrigin(origin) || process.env.NODE_ENV === 'development';
 
   if (process.env.LOG_ORIGIN === '1') {
-    console.log('[CORS] Origin:', origin || '(no-origin)', '=>', allowed ? 'ALLOW' : 'BLOCK');
+    console.log('[CORS]', origin || '(no-origin)', '=>', allowed ? 'ALLOW' : 'BLOCK');
   }
 
   if (allowed) {
@@ -63,7 +62,9 @@ app.use((req, res, next) => {
   return res.status(403).json({ success: false, error: `Not allowed by CORS: ${origin || 'no-origin'}` });
 });
 
-/* ============================ */
+/* ============================
+   ✅ Multer
+   ============================ */
 const upload = multer();
 
 /* ============================
@@ -76,4 +77,65 @@ const s3 = new S3Client({
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
-  fo
+  forcePathStyle: true,
+});
+
+/* ============================
+   ✅ Upload Route
+   ============================ */
+app.post('/', upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ success: false, error: 'No file uploaded' });
+    }
+
+    // Clean filename: strip extension & spaces, single timestamp
+    const originalName = path.parse(file.originalname).name.replace(/\s+/g, '_');
+    const fileName = `${Date.now()}-${originalName}`;
+
+    // Full-size (webp)
+    const fullImageBuffer = await sharp(file.buffer)
+      .resize({ width: 1080, withoutEnlargement: true })
+      .toFormat('webp', { quality: 75 })
+      .toBuffer();
+
+    await s3.send(new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: `full/${fileName}.webp`,
+      Body: fullImageBuffer,
+      ContentType: 'image/webp',
+    }));
+
+    // Thumbnail (webp)
+    const thumbBuffer = await sharp(file.buffer)
+      .resize({ width: 300 })
+      .toFormat('webp', { quality: 70 })
+      .toBuffer();
+
+    await s3.send(new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: `thumbnails/${fileName}.webp`,
+      Body: thumbBuffer,
+      ContentType: 'image/webp',
+    }));
+
+    const baseUrl = `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${process.env.R2_BUCKET}`;
+
+    res.json({
+      success: true,
+      fullSizeUrl: `${baseUrl}/full/${fileName}.webp`,
+      thumbnailUrl: `${baseUrl}/thumbnails/${fileName}.webp`,
+    });
+  } catch (err) {
+    console.error('Upload error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ============================
+   ✅ Start Server
+   ============================ */
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});

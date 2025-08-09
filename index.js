@@ -1,5 +1,4 @@
 const express = require('express');
-const cors = require('cors');
 const multer = require('multer');
 const sharp = require('sharp');
 const path = require('path');
@@ -10,35 +9,45 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 /* ============================
-   ✅ CORS Setup (with preflight)
+   ✅ Manual CORS (with preflight)
    ============================ */
-const allowedOrigins = [
+const allowedOrigins = new Set([
   'http://localhost:3000',              // Local dev
   'https://app.flutterflow.io',         // FlutterFlow Test Mode
-  'https://r2-image-compressor.onrender.com', // (Not required, but harmless)
-  // 'https://your-custom-domain.com'    // <— add later
-];
+  // 'https://your-custom-domain.com',  // <— add later
+]);
 
-const corsOptions = {
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
-      return callback(null, true);
-    }
-    return callback(new Error('Not allowed by CORS'));
-  },
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  optionsSuccessStatus: 200, // some old browsers choke on 204
-};
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
 
-// Preflight handler
-app.options('*', cors(corsOptions));
-// Main CORS
-app.use(cors(corsOptions));
+  // Allow no-origin (Postman/mobile) OR origin in allowlist
+  const isAllowed = !origin || allowedOrigins.has(origin) || process.env.NODE_ENV === 'development';
 
-/* ============================ */
+  if (isAllowed) {
+    if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+    else res.setHeader('Access-Control-Allow-Origin', '*');
+
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    // res.setHeader('Access-Control-Allow-Credentials', 'true'); // enable if you need cookies
+
+    if (req.method === 'OPTIONS') return res.sendStatus(200);
+    return next();
+  }
+
+  if (req.method === 'OPTIONS') return res.sendStatus(403);
+  return res.status(403).json({ success: false, error: `Not allowed by CORS: ${origin || 'no-origin'}` });
+});
+
+/* ============================
+   ✅ Multer Setup
+   ============================ */
 const upload = multer();
 
+/* ============================
+   ✅ S3 Client (Cloudflare R2)
+   ============================ */
 const s3 = new S3Client({
   region: 'auto',
   endpoint: process.env.R2_ENDPOINT,
@@ -89,6 +98,7 @@ app.post('/', upload.single('file'), async (req, res) => {
       ContentType: 'image/webp',
     }));
 
+    // Public base URL
     const baseUrl = `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${process.env.R2_BUCKET}`;
 
     res.json({
@@ -102,7 +112,9 @@ app.post('/', upload.single('file'), async (req, res) => {
   }
 });
 
-/* ============================ */
+/* ============================
+   ✅ Start Server
+   ============================ */
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });

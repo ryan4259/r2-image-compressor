@@ -11,6 +11,12 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+/* ====== Debug: Log origin for every request ====== */
+app.use((req, _res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} | Origin: ${req.headers.origin || '—'}`);
+  next();
+});
+
 /* ============================
    CORS (Express 5-safe)
    ============================ */
@@ -21,11 +27,10 @@ const allowedExact = new Set([
 ]);
 
 const isAllowedOrigin = (origin) => {
-  if (!origin) return true; // Postman / curl / same-origin
+  if (!origin) return true;
   try {
     const { hostname, origin: o } = new URL(origin);
     if (allowedExact.has(o)) return true;
-    // Allow FlutterFlow preview subdomains
     if (hostname === 'preview.flutterflow.app' || hostname.endsWith('.flutterflow.app')) return true;
     return false;
   } catch {
@@ -48,7 +53,7 @@ app.use(cors(corsOptions));
    ============================ */
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 }, // ~15MB
+  limits: { fileSize: 15 * 1024 * 1024 },
 });
 
 /* ============================
@@ -56,7 +61,7 @@ const upload = multer({
    ============================ */
 const s3 = new S3Client({
   region: 'auto',
-  endpoint: process.env.R2_ENDPOINT, // e.g. https://<accountid>.r2.cloudflarestorage.com
+  endpoint: process.env.R2_ENDPOINT,
   credentials: {
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
@@ -87,7 +92,6 @@ app.get('/', (_req, res) => res.send('R2 image compressor is running.'));
 
 /* ============================
    Upload + Compress
-   Field name: "file"
    ============================ */
 app.post('/', upload.single('file'), async (req, res) => {
   try {
@@ -103,7 +107,6 @@ app.post('/', upload.single('file'), async (req, res) => {
     const stamp = Date.now();
     const fileName = `${stamp}-${base}.webp`;
 
-    // Full-size (max width 1080)
     const fullImageBuffer = await sharp(file.buffer)
       .rotate()
       .resize({ width: 1080, withoutEnlargement: true })
@@ -117,7 +120,6 @@ app.post('/', upload.single('file'), async (req, res) => {
       ContentType: 'image/webp',
     }));
 
-    // Thumbnail (width 300)
     const thumbBuffer = await sharp(file.buffer)
       .rotate()
       .resize({ width: 300 })
@@ -143,8 +145,7 @@ app.post('/', upload.single('file'), async (req, res) => {
 });
 
 /* ============================
-   Signed URL (Private fetch)
-   GET /signed-url?key=<r2-key>&expires=3600
+   Signed URL
    ============================ */
 app.get('/signed-url', async (req, res) => {
   try {
@@ -152,12 +153,9 @@ app.get('/signed-url', async (req, res) => {
     if (!key) return res.status(400).json({ success: false, error: 'Missing key' });
     if (!isAllowedKey(key)) return res.status(400).json({ success: false, error: 'Invalid key' });
 
-    const command = new GetObjectCommand({
-      Bucket: process.env.R2_BUCKET,
-      Key: key,
-    });
-
+    const command = new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key });
     const url = await getSignedUrl(s3, command, { expiresIn: Number(expires) || 3600 });
+
     return res.json({ success: true, url });
   } catch (err) {
     console.error('signed-url error:', err);
@@ -166,8 +164,7 @@ app.get('/signed-url', async (req, res) => {
 });
 
 /* ============================
-   (Optional) Streaming proxy
-   GET /image?key=<r2-key>
+   Image Proxy
    ============================ */
 app.get('/image', async (req, res) => {
   try {

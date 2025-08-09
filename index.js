@@ -8,24 +8,19 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ✅ Hybrid CORS: allow FlutterFlow preview, localhost, and easy custom domain add later
-const allowedOrigins = [
-  'https://preview.flutterflow.app', // FlutterFlow preview
-  'http://localhost:3000',           // Local dev
-  // 'https://yourcustomdomain.com'   // <-- Add here later for production
-];
-
+// ✅ CORS fix: allow FlutterFlow preview, localhost, or no origin (Postman/mobile)
 app.use(cors({
   origin: function (origin, callback) {
-    console.log(`CORS check: Origin = ${origin}`); // Log to Render console
-
-    // Allow requests with no origin (Postman, mobile apps)
-    if (!origin) return callback(null, true);
-
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
+    if (
+      !origin || 
+      origin.includes('preview.flutterflow.app') || 
+      origin.includes('localhost')
+      // Add your custom domain later:
+      // || origin.includes('yourdomain.com')
+    ) {
+      callback(null, true);
     } else {
-      return callback(new Error(`Not allowed by CORS: ${origin}`));
+      callback(new Error(`CORS blocked: ${origin}`));
     }
   },
   methods: ['GET', 'POST', 'OPTIONS'],
@@ -47,16 +42,11 @@ const s3 = new S3Client({
 app.post('/', upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
-
     if (!file) {
-      return res.status(400).json({
-        success: false,
-        error: 'No file uploaded — make sure the form-data field name is "file"'
-      });
+      return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
 
-    const baseName = file.originalname.replace(/\.[^/.]+$/, ''); // remove extension
-    const fileName = `${Date.now()}-${baseName}`;
+    const fileName = `${Date.now()}-${file.originalname}`;
 
     // Compress full-size image
     const fullImageBuffer = await sharp(file.buffer)
@@ -64,7 +54,6 @@ app.post('/', upload.single('file'), async (req, res) => {
       .toFormat('webp', { quality: 75 })
       .toBuffer();
 
-    // Upload full-size image
     await s3.send(new PutObjectCommand({
       Bucket: process.env.R2_BUCKET,
       Key: `full/${fileName}.webp`,
@@ -78,7 +67,6 @@ app.post('/', upload.single('file'), async (req, res) => {
       .toFormat('webp', { quality: 70 })
       .toBuffer();
 
-    // Upload thumbnail
     await s3.send(new PutObjectCommand({
       Bucket: process.env.R2_BUCKET,
       Key: `thumbnails/${fileName}.webp`,

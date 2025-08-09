@@ -21,27 +21,37 @@ const allowedOrigins = [
   // 'https://your-custom-domain.com',        // Add when ready
 ];
 
+// ---- CORS (replace your current block) ----
+const allowedExact = new Set([
+  'http://localhost:3000',
+  'https://app.flutterflow.io',
+  'https://r2-image-compressor.onrender.com',
+]);
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true; // Postman / curl / same-origin
+  try {
+    const { hostname, origin: o } = new URL(origin);
+    // Exact matches
+    if (allowedExact.has(o)) return true;
+    // Allow FlutterFlow preview subdomains
+    if (hostname === 'preview.flutterflow.app' || hostname.endsWith('.flutterflow.app')) return true;
+    return false;
+  } catch {
+    return false;
+  }
+};
+
 const corsOptions = {
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
-      return callback(null, true);
-    }
-    return callback(new Error('Not allowed by CORS'));
-  },
+  origin: (origin, cb) => (isAllowedOrigin(origin) ? cb(null, true) : cb(new Error('Not allowed by CORS'))),
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   optionsSuccessStatus: 200,
 };
-app.options(/.*/, cors(corsOptions)); // Preflight for any path (Express 5 compatible)
-app.use(cors(corsOptions));
 
-/* ============================
-   Multer (in-memory)
-   ============================ */
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 }, // ~15MB
-});
+app.options(/.*/, cors(corsOptions));
+app.use(cors(corsOptions));
+// ---- end CORS ----
 
 /* ============================
    Cloudflare R2 (AWS SDK v3)

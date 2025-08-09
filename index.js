@@ -8,18 +8,23 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-app.use(cors());
+// ✅ Allow all origins for testing (CORS fix)
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 const upload = multer();
 
 const s3 = new S3Client({
   region: 'auto',
-  endpoint: process.env.R2_ENDPOINT, // <--- changed here to use env var directly
+  endpoint: process.env.R2_ENDPOINT,
   credentials: {
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
-  forcePathStyle: true, // required for Cloudflare R2
+  forcePathStyle: true,
 });
 
 app.post('/', upload.single('file'), async (req, res) => {

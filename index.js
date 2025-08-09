@@ -9,29 +9,34 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ============================
-// ✅ CORS Setup
-// ============================
-// Allow Render test URL + optional future custom domain
+/* ============================
+   ✅ CORS Setup (with preflight)
+   ============================ */
 const allowedOrigins = [
-  'http://localhost:3000', // Local dev
-  'https://app.flutterflow.io', // FF test mode
-  'https://r2-image-compressor.onrender.com', // Your Render backend
-  'https://your-custom-domain.com' // Future custom domain
+  'http://localhost:3000',              // Local dev
+  'https://app.flutterflow.io',         // FlutterFlow Test Mode
+  'https://r2-image-compressor.onrender.com', // (Not required, but harmless)
+  // 'https://your-custom-domain.com'    // <— add later
 ];
 
-app.use(cors({
+const corsOptions = {
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
+      return callback(null, true);
     }
+    return callback(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  optionsSuccessStatus: 200, // some old browsers choke on 204
+};
 
+// Preflight handler
+app.options('*', cors(corsOptions));
+// Main CORS
+app.use(cors(corsOptions));
+
+/* ============================ */
 const upload = multer();
 
 const s3 = new S3Client({
@@ -44,9 +49,9 @@ const s3 = new S3Client({
   forcePathStyle: true,
 });
 
-// ============================
-// ✅ Upload Route
-// ============================
+/* ============================
+   ✅ Upload Route
+   ============================ */
 app.post('/', upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
@@ -54,11 +59,11 @@ app.post('/', upload.single('file'), async (req, res) => {
       return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
 
-    // ✅ Clean filename: strip extension & spaces, only ONE timestamp
+    // Clean filename: strip extension & spaces, single timestamp
     const originalName = path.parse(file.originalname).name.replace(/\s+/g, '_');
     const fileName = `${Date.now()}-${originalName}`;
 
-    // ✅ Compress full-size image
+    // Full-size (webp)
     const fullImageBuffer = await sharp(file.buffer)
       .resize({ width: 1080, withoutEnlargement: true })
       .toFormat('webp', { quality: 75 })
@@ -71,7 +76,7 @@ app.post('/', upload.single('file'), async (req, res) => {
       ContentType: 'image/webp',
     }));
 
-    // ✅ Create thumbnail
+    // Thumbnail (webp)
     const thumbBuffer = await sharp(file.buffer)
       .resize({ width: 300 })
       .toFormat('webp', { quality: 70 })
@@ -84,7 +89,6 @@ app.post('/', upload.single('file'), async (req, res) => {
       ContentType: 'image/webp',
     }));
 
-    // ✅ Base URL (will change if you add custom domain later)
     const baseUrl = `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${process.env.R2_BUCKET}`;
 
     res.json({
@@ -92,16 +96,13 @@ app.post('/', upload.single('file'), async (req, res) => {
       fullSizeUrl: `${baseUrl}/full/${fileName}.webp`,
       thumbnailUrl: `${baseUrl}/thumbnails/${fileName}.webp`,
     });
-
   } catch (err) {
     console.error('Upload error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// ============================
-// ✅ Start Server
-// ============================
+/* ============================ */
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });

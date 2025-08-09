@@ -9,10 +9,7 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 /* ============================
-   ✅ CORS (manual + preflight)
-   - Allows any FlutterFlow host
-   - Allows localhost
-   - Extra origins via env ALLOWED_ORIGINS (comma-separated)
+   ✅ CORS (manual + preflight, robust)
    ============================ */
 function isAllowedOrigin(origin) {
   if (!origin) return true; // Postman/mobile/native
@@ -28,10 +25,17 @@ function isAllowedOrigin(origin) {
 
     const isLocalhost = h === 'localhost' || h === '127.0.0.1';
 
+    // Extra origins from env; accepts either full origins or hostnames.
     const extra = (process.env.ALLOWED_ORIGINS || '')
       .split(',')
       .map(s => s.trim())
       .filter(Boolean);
+
+    // Wildcard bypass via env: ALLOW_ALL_ORIGINS=1
+    if (process.env.ALLOW_ALL_ORIGINS === '1') return true;
+
+    // Handle explicit "*" in the list
+    if (extra.includes('*')) return true;
 
     const inExtra = extra.includes(origin) || extra.includes(h);
     return isFlutterFlow || isLocalhost || inExtra;
@@ -133,9 +137,7 @@ app.post('/', upload.single('file'), async (req, res) => {
   }
 });
 
-/* ============================
-   ✅ Start Server
-   ============================ */
+/* ============================ */
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
